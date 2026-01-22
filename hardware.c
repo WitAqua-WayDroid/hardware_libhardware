@@ -48,6 +48,7 @@
 #define HAL_LIBRARY_PATH1 "/system/" HAL_LIBRARY_SUBDIR
 #define HAL_LIBRARY_PATH2 "/vendor/" HAL_LIBRARY_SUBDIR
 #define HAL_LIBRARY_PATH3 "/odm/" HAL_LIBRARY_SUBDIR
+#define HAL_LIBRARY_PATH4 "/vendor_extra/" HAL_LIBRARY_SUBDIR
 
 /**
  * There are a set of variant filename for modules. The form of the filename
@@ -208,6 +209,12 @@ static int hw_module_exists(char *path, size_t path_len, const char *name,
     if (path_in_path(path, HAL_LIBRARY_PATH1) && access(path, R_OK) == 0)
         return 0;
 #endif
+
+    // Waydroid: check inside vendor_extra path as last fallback
+    snprintf(path, path_len, "%s/%s.%s.so",
+             HAL_LIBRARY_PATH4, name, subname);
+    if (path_in_path(path, HAL_LIBRARY_PATH4) && access(path, R_OK) == 0)
+        return 0;
 
 #endif // __ANDROID_APEX__
 
