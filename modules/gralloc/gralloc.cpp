@@ -32,8 +32,10 @@
 
 #include <hardware/gralloc.h>
 #include <hardware/hardware.h>
+#include <system/graphics.h>
 
 #define HAL_PIXEL_FORMAT_R8 0x38
+#define HAL_PIXEL_FORMAT_YV12 0x32315659
 
 #include "gralloc_priv.h"
 #include "gr.h"
@@ -46,7 +48,7 @@ struct gralloc_context_t {
 };
 
 static int gralloc_alloc_buffer(alloc_device_t* dev,
-        size_t size, int usage, buffer_handle_t* pHandle);
+        size_t size, int usage, buffer_handle_t* pHandle, int format = 0, int width = 0, int height = 0, int stride = 0);
 
 /*****************************************************************************/
 
@@ -63,6 +65,11 @@ extern int gralloc_lock(gralloc_module_t const* module,
 
 extern int gralloc_unlock(gralloc_module_t const* module,
         buffer_handle_t handle);
+
+extern int gralloc_lock_ycbcr(gralloc_module_t const* module,
+        buffer_handle_t handle, int usage,
+        int l, int t, int w, int h,
+        struct android_ycbcr *ycbcr);
 
 extern int gralloc_register_buffer(gralloc_module_t const* module,
         buffer_handle_t handle);
@@ -91,6 +98,8 @@ struct private_module_t HAL_MODULE_INFO_SYM = {
         .unregisterBuffer = gralloc_unregister_buffer,
         .lock = gralloc_lock,
         .unlock = gralloc_unlock,
+        .perform = NULL,
+        .lock_ycbcr = gralloc_lock_ycbcr,
     },
     .framebuffer = 0,
     .flags = 0,
@@ -126,7 +135,7 @@ static int gralloc_alloc_framebuffer_locked(alloc_device_t* dev,
         // we return a regular buffer which will be memcpy'ed to the main
         // screen when post is called.
         int newUsage = (usage & ~GRALLOC_USAGE_HW_FB) | GRALLOC_USAGE_HW_2D;
-        return gralloc_alloc_buffer(dev, bufferSize, newUsage, pHandle);
+        return gralloc_alloc_buffer(dev, bufferSize, newUsage, pHandle, format, 0, 0, 0);
     }
 
     if (bufferMask >= ((1LU<<numBuffers)-1)) {
@@ -137,7 +146,7 @@ static int gralloc_alloc_framebuffer_locked(alloc_device_t* dev,
     // create a "fake" handles for it
     intptr_t vaddr = intptr_t(m->framebuffer->base);
     private_handle_t* hnd = new private_handle_t(dup(m->framebuffer->fd), size,
-            private_handle_t::PRIV_FLAGS_FRAMEBUFFER);
+            private_handle_t::PRIV_FLAGS_FRAMEBUFFER, format, 0, 0, 0);
 
     // find a free slot
     for (uint32_t i=0 ; i<numBuffers ; i++) {
@@ -167,7 +176,7 @@ static int gralloc_alloc_framebuffer(alloc_device_t* dev,
 }
 
 static int gralloc_alloc_buffer(alloc_device_t* dev,
-        size_t size, int /*usage*/, buffer_handle_t* pHandle)
+        size_t size, int /*usage*/, buffer_handle_t* pHandle, int format, int width, int height, int stride)
 {
     int err = 0;
     int fd = -1;
@@ -181,7 +190,7 @@ static int gralloc_alloc_buffer(alloc_device_t* dev,
     }
 
     if (err == 0) {
-        private_handle_t* hnd = new private_handle_t(fd, size, 0);
+        private_handle_t* hnd = new private_handle_t(fd, size, 0, format, width, height, stride);
         gralloc_module_t* module = reinterpret_cast<gralloc_module_t*>(
                 dev->common.module);
         err = mapBuffer(module, hnd);
@@ -210,6 +219,7 @@ static int gralloc_alloc(alloc_device_t* dev,
         return -EINVAL;
 
     int bytesPerPixel = 0;
+    bool isYuv420 = false;
     switch (format) {
         case HAL_PIXEL_FORMAT_RGBA_FP16:
             bytesPerPixel = 8;
@@ -233,6 +243,11 @@ static int gralloc_alloc(alloc_device_t* dev,
         case HAL_PIXEL_FORMAT_BLOB:
             bytesPerPixel = 1;
             break;
+        case HAL_PIXEL_FORMAT_YV12:
+        case HAL_PIXEL_FORMAT_YCbCr_420_888:
+            bytesPerPixel = 1;
+            isYuv420 = true;
+            break;
         default:
             ALOGE("gralloc_alloc bad format %d", format);
             return -EINVAL;
@@ -244,11 +259,14 @@ static int gralloc_alloc(alloc_device_t* dev,
     size_t stride = align(width, tileWidth);
     size_t size = align(height, tileHeight) * stride * bytesPerPixel + 4;
 
+    if (isYuv420)
+        size = (size - 4) * 3 / 2 + 4;
+
     int err;
     if (0) {
         err = gralloc_alloc_framebuffer(dev, size, format, usage, pHandle);
     } else {
-        err = gralloc_alloc_buffer(dev, size, usage, pHandle);
+        err = gralloc_alloc_buffer(dev, size, usage, pHandle, format, width, height, stride);
     }
 
     if (err < 0) {
